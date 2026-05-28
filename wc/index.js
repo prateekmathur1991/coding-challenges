@@ -22,6 +22,11 @@ let flag = args[0];
 let filePath = args[1];
 
 if (flag === '-c') {
-  let thatValue = getFileStats(filePath);
-  thatValue.then((result) => console.log(result));
+  (async () => {
+    const result = await getFileStats(filePath);
+    console.log(result);
+  })();
+} else {
+  console.error('Invalid flag. Use -c for character count.');
+  process.exit(1);
 }
