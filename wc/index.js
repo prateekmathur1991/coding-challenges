@@ -41,6 +41,18 @@ async function getWordCount(somePath) {
   return wordCount;
 }
 
+async function getCharacterCount(somePath) {
+  return new Promise((resolve, reject) => {
+    let totalChars = 0;
+    fs.createReadStream(somePath)
+    .on('data', (chunk) => {
+      totalChars += [...chunk].length;
+    })
+    .on('end', () => resolve(totalChars))
+    .on('error', () => reject("Buffer reading failed"));
+  });
+}
+
 const args = process.argv.slice(2);
 if (args.length != 2) {
   console.error('Usage: ccwc <flag> <fileName>');
@@ -64,6 +76,11 @@ if (flag === '-c') {
   (async () => {
     let wordCount = await getWordCount(filePath);
     console.log(wordCount + ' ' + filePath);
+  })();
+} else if (flag === '-m') {
+  (async () => {
+    let characterCount = await getCharacterCount(filePath);
+    console.log(characterCount + ' ' + filePath);
   })();
 } else {
   console.error('Invalid flag used');
