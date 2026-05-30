@@ -22,6 +22,25 @@ async function getFileLineCount(somePath) {
   });
 }
 
+async function getWordCount(somePath) {
+  let wordCount = 0;
+  const fileStream = fs.createReadStream(somePath);
+  const lineReader = readline.createInterface({
+    input: fileStream,
+    crlfDelay: Infinity
+  });
+
+  // Process the file line by line without keeping it all in memory
+  for await (const line of lineReader) {
+    const cleanedLine = line.trim();
+    if (cleanedLine !== '') {
+      wordCount += cleanedLine.split(/\s+/).length;
+    }
+  }
+
+  return wordCount;
+}
+
 const args = process.argv.slice(2);
 if (args.length != 2) {
   console.error('Usage: ccwc <flag> <fileName>');
@@ -36,11 +55,15 @@ if (flag === '-c') {
     const result = await getFileStats(filePath);
     console.log(result + ' ' + filePath);
   })();
-
 } else if (flag === '-l') {
   (async () => {
     let lineCount = await getFileLineCount(filePath);
     console.log(lineCount + ' ' + filePath);
+  })();
+} else if (flag === '-w') {
+  (async () => {
+    let wordCount = await getWordCount(filePath);
+    console.log(wordCount + ' ' + filePath);
   })();
 } else {
   console.error('Invalid flag used');
