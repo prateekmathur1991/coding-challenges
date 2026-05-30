@@ -1,99 +1,139 @@
 #!/usr/bin/env node
 
 const fs = require('fs');
-const readline = require('readline');
+const { StringDecoder } = require('string_decoder');
 
-async function getFileSize(somePath) {
-  let stats = await fs.promises.stat(somePath);
-  return stats.size;
-}
-
-async function getFileLineCount(somePath) {
+async function processStream(stream) {
   return new Promise((resolve, reject) => {
-    let lineCount = 0;
-    fs.createReadStream(somePath)
-      .on('data', (buffer) => {
-        for (let i = 0; i < buffer.length; i++) {
-          if (buffer[i] === 10) lineCount++; // 10 is '\n'
+    const decoder = new StringDecoder('utf8');
+    let leftover = '';
+    let words = 0;
+    let lines = 0;
+    let chars = 0; // character count (code points)
+    let bytes = 0;
+
+    stream.on('error', (err) => reject(err));
+
+    stream.on('data', (chunk) => {
+      bytes += chunk.length;
+      const text = decoder.write(chunk);
+
+      // count lines
+      for (let i = 0; i < text.length; i++) {
+        if (text[i] === '\n') lines++;
+      }
+
+      // count characters (iterate by code point)
+      for (const _ch of text) chars++;
+
+      // count words using leftover to handle split tokens across chunks
+      const combined = leftover + text;
+      const parts = combined.split(/\s+/);
+      if (/\s$/.test(combined)) {
+        leftover = '';
+        words += parts.filter(Boolean).length;
+      } else {
+        leftover = parts.pop() || '';
+        words += parts.filter(Boolean).length;
+      }
+    });
+
+    stream.on('end', () => {
+      const last = decoder.end();
+      if (last) {
+        for (let i = 0; i < last.length; i++) {
+          if (last[i] === '\n') lines++;
         }
-      })
-      .on('end', () => resolve(lineCount))
-      .on('error', () => reject("Buffer reading failed"));
+        for (const _ch of last) chars++;
+        const combined = leftover + last;
+        const parts = combined.split(/\s+/);
+        words += parts.filter(Boolean).length;
+      } else if (leftover) {
+        words += 1;
+      }
+
+      resolve({ bytes, lines, words, chars });
+    });
   });
 }
 
-async function getWordCount(somePath) {
-  let wordCount = 0;
-  const fileStream = fs.createReadStream(somePath);
-  const lineReader = readline.createInterface({
-    input: fileStream,
-    crlfDelay: Infinity
-  });
-
-  // Process the file line by line without keeping it all in memory
-  for await (const line of lineReader) {
-    const cleanedLine = line.trim();
-    if (cleanedLine !== '') {
-      wordCount += cleanedLine.split(/\s+/).length;
-    }
+async function processFilePath(filePath) {
+  if (filePath === '-' || filePath === undefined) {
+    return processStream(process.stdin);
   }
 
-  return wordCount;
+  const stream = fs.createReadStream(filePath);
+  return processStream(stream);
 }
 
-async function getCharacterCount(somePath) {
-  return new Promise((resolve, reject) => {
-    let totalChars = 0;
-    fs.createReadStream(somePath)
-      .on('data', (chunk) => {
-        totalChars += [...chunk].length;
-      })
-      .on('end', () => resolve(totalChars))
-      .on('error', () => reject("Buffer reading failed"));
-  });
+async function getFileSize(filePath) {
+  // For real files prefer stat which is cheap. For stdin, stat isn't available.
+  if (!filePath || filePath === '-') return null;
+  try {
+    const stats = await fs.promises.stat(filePath);
+    return stats.size;
+  } catch (e) {
+    return null;
+  }
 }
 
 const args = process.argv.slice(2);
 
-if (args.length == 0) {
-  console.error("Usage: ccwc <flag> <filename>");
+function printUsageAndExit() {
+  console.error('Usage: ccwc <flag> <filename>');
   process.exit(1);
 }
 
-if (args.length == 2) {
-  let flag = args[0];
-  let filePath = args[1];
+(async () => {
+  let flag = null;
+  let filePath = null;
 
-  if (flag === '-c') {
-    (async () => {
-      let fileSize = await getFileSize(filePath);
-      console.log(fileSize + ' ' + filePath);
-    })();
-  } else if (flag === '-l') {
-    (async () => {
-      let lineCount = await getFileLineCount(filePath);
-      console.log(lineCount + ' ' + filePath);
-    })();
-  } else if (flag === '-w') {
-    (async () => {
-      let wordCount = await getWordCount(filePath);
-      console.log(wordCount + ' ' + filePath);
-    })();
-  } else if (flag === '-m') {
-    (async () => {
-      let characterCount = await getCharacterCount(filePath);
-      console.log(characterCount + ' ' + filePath);
-    })();
+  if (args.length === 0) {
+    // read from stdin
+    filePath = '-';
+  } else if (args.length === 1) {
+    if (args[0] !== '-' && args[0].startsWith('-') && args[0].length > 1) {
+      // single flag -> read stdin
+      flag = args[0];
+      filePath = '-';
+    } else {
+      filePath = args[0];
+    }
+  } else if (args.length === 2) {
+    flag = args[0];
+    filePath = args[1];
   } else {
-    console.error('Invalid flag used');
+    printUsageAndExit();
+  }
+
+  try {
+    const result = await processFilePath(filePath);
+
+    // If we have a real file path, prefer stat for byte count when available
+    let bytes = result.bytes;
+    const statBytes = await getFileSize(filePath);
+    if (statBytes !== null) bytes = statBytes;
+
+    const lines = result.lines;
+    const words = result.words;
+    const chars = result.chars;
+
+    if (!flag) {
+      console.log(bytes + ' ' + lines + ' ' + words + ' ' + filePath);
+    } else if (flag === '-c') {
+      console.log(bytes + ' ' + filePath);
+    } else if (flag === '-l') {
+      console.log(lines + ' ' + filePath);
+    } else if (flag === '-w') {
+      console.log(words + ' ' + filePath);
+    } else if (flag === '-m') {
+      console.log(chars + ' ' + filePath);
+    } else {
+      console.error('Invalid flag used');
+      process.exit(1);
+    }
+  } catch (err) {
+    console.error('Error:', err && err.message ? err.message : err);
     process.exit(1);
   }
-} else {
-  let filePath = args[0];
-  (async () => {
-    let fileSize = await getFileSize(filePath);
-    let lineCount = await getFileLineCount(filePath);
-    let wordCount = await getWordCount(filePath);
-    console.log(fileSize + ' ' + lineCount + ' ' + wordCount + ' ' + filePath);
-  })();
-}
+})();
